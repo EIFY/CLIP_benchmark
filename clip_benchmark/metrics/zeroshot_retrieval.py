@@ -4,6 +4,7 @@ from contextlib import suppress
 import torch
 import torch.nn.functional as F
 from tqdm import tqdm
+from open_clip import METRICS
 
 def evaluate(model, dataloader, tokenizer,  device, amp=True, recall_k_list=[5]):
     """
@@ -33,6 +34,7 @@ def evaluate(model, dataloader, tokenizer,  device, amp=True, recall_k_list=[5])
     
     dict of retrieval metrics
     """
+    metric = METRICS[model.geometry]
     # list of batch of images embedding
     batch_images_emb_list = []
     # list of batch of text embedding
@@ -50,8 +52,11 @@ def evaluate(model, dataloader, tokenizer,  device, amp=True, recall_k_list=[5])
 
         # compute the embedding of images and texts
         with torch.no_grad(), autocast():
-            batch_images_emb = F.normalize(model.encode_image(batch_images), dim=-1)
-            batch_texts_emb = F.normalize(model.encode_text(batch_texts_tok), dim=-1)
+            output = model(image=batch_images, text=batch_texts_tok)
+            if isinstance(output, dict):
+                batch_images_emb, batch_texts_emb, curvature = output['image_features'], output['text_features'], output['curvature']
+            else:
+                batch_images_emb, batch_texts_emb,  _, _, curvature = output
 
         batch_images_emb_list.append(batch_images_emb.cpu())
         batch_texts_emb_list.append(batch_texts_emb.cpu())
@@ -59,12 +64,17 @@ def evaluate(model, dataloader, tokenizer,  device, amp=True, recall_k_list=[5])
         
     batch_size = len(batch_images_emb_list[0])
 
-    # concatenate all embeddings
+    # concatenate all image embeddings
     images_emb = torch.cat(batch_images_emb_list)
-    texts_emb = torch.cat(batch_texts_emb_list)
 
-    # get the score for each text and image pair
-    scores  = texts_emb @ images_emb.t()
+    # My TensorBook ran out of main memory trying to compute the Euclidean dist. between all the text embeddings & image embeddings,
+    # so I have to compute the scores by batches of text embeddings. My guess is this won't be much slower since we are doing this
+    # in CPU anyway, but YMMV.
+    score_list = []
+    for batch_texts_emb in batch_texts_emb_list:
+        score_list.append(metric(batch_texts_emb, images_emb, curvature))
+
+    scores = torch.cat(score_list)
 
     # construct a the positive pair matrix, which tells whether each text-image pair is a positive or not
     positive_pairs = torch.zeros_like(scores, dtype=bool)
