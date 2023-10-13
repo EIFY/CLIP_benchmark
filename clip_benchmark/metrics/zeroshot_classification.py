@@ -10,6 +10,7 @@ import torch.nn.functional as F
 from tqdm import tqdm
 
 from sklearn.metrics import classification_report, balanced_accuracy_score
+from open_clip import METRICS
 
 
 def zero_shot_classifier(model, tokenizer, classnames, templates, device, amp=True):
@@ -49,11 +50,13 @@ def zero_shot_classifier(model, tokenizer, classnames, templates, device, amp=Tr
             else:
                 raise ValueError("templates must be a list or a dict")
             texts = tokenizer(texts).to(device)  # tokenize
-            class_embeddings = model.encode_text(texts)
-            class_embedding = F.normalize(class_embeddings, dim=-1).mean(dim=0)
-            class_embedding /= class_embedding.norm()
+            output = model(text=texts)
+            class_embeddings = output['text_features'] if isinstance(output, dict) else output[1]
+            class_embedding = class_embeddings.mean(dim=0)
+            if model.normalize:
+                class_embedding /= class_embedding.norm()
             zeroshot_weights.append(class_embedding)
-        zeroshot_weights = torch.stack(zeroshot_weights, dim=1).to(device)
+        zeroshot_weights = torch.stack(zeroshot_weights).to(device)
     return zeroshot_weights
 
 
@@ -101,6 +104,7 @@ def run_classification(model, classifier, dataloader, device, amp=True):
         - true (N,) are the actual classes
     """
     autocast = torch.cuda.amp.autocast if amp else suppress
+    metric = METRICS[model.geometry]
     pred = []
     true = []
     nb = 0
@@ -111,9 +115,12 @@ def run_classification(model, classifier, dataloader, device, amp=True):
 
             with autocast():
                 # predict
-                image_features = model.encode_image(images)
-                image_features = F.normalize(image_features, dim=-1)
-                logits = 100. * image_features @ classifier
+                output = model(image=images)
+                if isinstance(output, dict):
+                    image_features, curvature = output['image_features'], output['curvature']
+                else:
+                    image_features, _,  _, _, curvature = output
+                logits = 100. * metric(image_features, classifier, curvature)
             
             true.append(target.cpu())
             pred.append(logits.float().cpu())

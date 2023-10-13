@@ -38,9 +38,9 @@ class Featurizer(torch.nn.Module):
         self.model = model
 
     def forward(self, input):
-        # note: not sure if we want to train on l2-normalized features
-        image_features = self.model.encode_image(input)
-        image_features = F.normalize(image_features, dim=-1)
+        # Whether we normalize the feature vector depends on whether the contrastive
+        # pretraining is done with normalized embedding or not.
+        image_features = self.model.encode_image(input, normalize=self.model.normalize)
         return image_features
 
 class FeatureDataset(Dataset):

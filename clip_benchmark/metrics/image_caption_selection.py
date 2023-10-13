@@ -4,6 +4,7 @@ from contextlib import suppress
 import torch
 import torch.nn.functional as F
 from tqdm import tqdm
+from open_clip import METRICS
 
 def evaluate(model, dataloader, tokenizer,  device, amp=True, recall_k_list=[5]):
     """
@@ -30,6 +31,7 @@ def evaluate(model, dataloader, tokenizer,  device, amp=True, recall_k_list=[5])
     
     dict of accuracy metric
     """
+    metric = METRICS[model.geometry]
     autocast = torch.cuda.amp.autocast if amp else suppress
     preds = []
     for batch_images, batch_texts in tqdm(dataloader):
@@ -40,14 +42,19 @@ def evaluate(model, dataloader, tokenizer,  device, amp=True, recall_k_list=[5])
 
         # compute the embedding of images and texts
         with torch.no_grad(), autocast():
-            batch_images_emb = F.normalize(model.encode_image(batch_images), dim=-1).cpu()
-            batch_texts_emb = F.normalize(model.encode_text(batch_texts_tok), dim=-1).cpu()
+            output = model(image=batch_images, text=batch_texts_tok)
+            if isinstance(output, dict):
+                batch_images_emb, batch_texts_emb, curvature = output['image_features'], output['text_features'], output['curvature']
+            else:
+                batch_images_emb, batch_texts_emb,  _, _, curvature = output
+            batch_images_emb = batch_images_emb.cpu()
+            batch_texts_emb = batch_texts_emb.cpu()
         start = 0
         for i, nb in enumerate(nb_texts_for_each_image):
             end = start + nb
             image_emb = batch_images_emb[i:i+1]
             texts_emb = batch_texts_emb[start:end]
-            scores = image_emb @ texts_emb.t()
+            scores = metric(image_emb, texts_emb, curvature)
             scores = scores[0]
             pred = scores.argmax().item()
             start = end 
