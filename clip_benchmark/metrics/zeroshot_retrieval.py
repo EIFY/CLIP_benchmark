@@ -57,9 +57,10 @@ def evaluate(model, dataloader, tokenizer,  device, amp=True, recall_k_list=[5])
                 batch_images_emb, batch_texts_emb, curvature = output['image_features'], output['text_features'], output['curvature']
             else:
                 batch_images_emb, batch_texts_emb,  _, _, curvature = output
-
-        batch_images_emb_list.append(batch_images_emb.cpu())
-        batch_texts_emb_list.append(batch_texts_emb.cpu())
+        # Score computation is now done by GPU due to better op support, specifically to avoid RuntimeError: sqrt_vml_cpu not implemented for 'Half'.
+        # Potential OOM error is partially mitigated by per-batch computation below.
+        batch_images_emb_list.append(batch_images_emb)
+        batch_texts_emb_list.append(batch_texts_emb)
         texts_image_index.extend(batch_texts_image_index)
         
     batch_size = len(batch_images_emb_list[0])
